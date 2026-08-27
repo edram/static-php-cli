@@ -91,11 +91,22 @@ class curl
 
         // patch pkgconf
         $lib->patchPkgconfPrefix(['libcurl.pc']);
-        // curl's CMake embeds krb5 link flags directly without following Requires.private chain,
-        // so -lkrb5support (from mit-krb5.pc Libs.private) is missing from libcurl.pc.
+        // curl's CMake flattens krb5 without its static-only flags. Patch the pkg-config
+        // fields directly because their dependency ordering changes between curl releases.
         $pc_path = "{$lib->getLibDir()}/pkgconfig/libcurl.pc";
         if (str_contains(FileSystem::readFile($pc_path), '-lgssapi_krb5')) {
-            FileSystem::replaceFileRegex($pc_path, '/-lcom_err$/m', '-lcom_err -lkrb5support');
+            FileSystem::replaceFileRegex(
+                $pc_path,
+                '/^(Libs(?:\.private)?:(?!.*-lkrb5support).*)$/m',
+                '$1 -lkrb5support',
+            );
+            if (SystemTarget::getTargetOS() === 'Darwin') {
+                FileSystem::replaceFileRegex(
+                    $pc_path,
+                    '/^(Libs(?:\.private)?:(?!.*-framework Kerberos).*)$/m',
+                    '$1 -framework Kerberos',
+                );
+            }
         }
         // FindThreads can put '-lpthread' into INTERFACE_LINK_LIBRARIES; curl's pc generator
         // prepends '-l' to each entry, producing '-l-lpthread'. Strip the extra '-l'.

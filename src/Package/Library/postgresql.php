@@ -22,6 +22,33 @@ use StaticPHP\Util\SPCConfigUtil;
 #[Library('postgresql')]
 class postgresql extends LibraryPackage
 {
+    #[BeforeStage('php', [php::class, 'buildconfForUnix'], 'postgresql')]
+    #[PatchDescription('Use complete static libpq dependencies in legacy PHP checks')]
+    public function patchBeforePHPBuildconf(TargetPackage $package): void
+    {
+        if (php::getPHPVersionID($package->getSourceDir()) >= 80400) {
+            return;
+        }
+
+        $checks = [
+            ['pdo_pgsql', 'PDO_PGSQL_LIBS', 'PDO_PGSQL_SHARED_LIBADD'],
+            ['pgsql', 'PGSQL_STATIC_LIBS', 'PGSQL_SHARED_LIBADD'],
+        ];
+        foreach ($checks as [$extension, $variable, $shared_libs]) {
+            $config = "{$package->getSourceDir()}/ext/{$extension}/config.m4";
+            FileSystem::replaceFileStr(
+                $config,
+                "  old_LIBS=\$LIBS\n  old_LDFLAGS=\$LDFLAGS",
+                "  old_LIBS=\$LIBS\n  old_LDFLAGS=\$LDFLAGS\n  {$variable}=`\$PKG_CONFIG --static --libs libpq`\n  LIBS=\"\${$variable} \$LIBS\"",
+            );
+            FileSystem::replaceFileStr(
+                $config,
+                "  PHP_ADD_LIBRARY_WITH_PATH(pq, \$PGSQL_LIBDIR, {$shared_libs})",
+                "  PHP_EVAL_LIBLINE(\${$variable}, {$shared_libs})\n  PHP_ADD_LIBRARY_WITH_PATH(pq, \$PGSQL_LIBDIR, {$shared_libs})",
+            );
+        }
+    }
+
     #[BeforeStage('php', [php::class, 'configureForUnix'], 'postgresql')]
     #[PatchDescription('Patch to avoid explicit_bzero detection issues on some systems')]
     public function patchBeforePHPConfigure(TargetPackage $package): void
@@ -198,6 +225,12 @@ class postgresql extends LibraryPackage
             ->exec("rm -rf {$this->getBuildRootPath()}/lib/*.so*")
             ->exec("rm -rf {$this->getBuildRootPath()}/lib/*.dylib");
 
-        FileSystem::replaceFileStr("{$this->getLibDir()}/pkgconfig/libpq.pc", '-lldap', '-lldap -llber');
+        $pkg_config = "{$this->getLibDir()}/pkgconfig/libpq.pc";
+        FileSystem::replaceFileStr($pkg_config, '-lldap', '-lldap -llber');
+        FileSystem::replaceFileRegex(
+            $pkg_config,
+            '/^Libs\.private:(?!.*-lpgcommon_shlib)\s*/m',
+            '$0-lpgcommon_shlib -lpgport_shlib ',
+        );
     }
 }
